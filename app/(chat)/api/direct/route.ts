@@ -12,6 +12,8 @@ import {
   ChatCompletionMessageToolCall,
 } from "openai/resources/index.mjs";
 
+import { CompletionRequest, Maxim, MaximLogger } from "@maximai/maxim-js";
+
 export const maxDuration = 60;
 
 type AllowedTools =
@@ -253,12 +255,51 @@ export async function POST(request: Request) {
 
   const conversationId = id ?? generateUUID();
 
+  const maxim = new Maxim({
+    baseUrl: process.env.LOGGING_BASE_URL!,
+    apiKey: process.env.MAXIM_API_KEY!,
+  });
+
+  const logger = await maxim.logger({
+    id: process.env.MAXIM_REPO_ID!,
+  });
+
+  if (!logger) {
+    console.log("Failed to init Maxim logger");
+  }
+
+  // create session
+  const session = logger?.session({
+    id: conversationId,
+  });
+
+  const traceId = generateUUID();
+
+  logger?.trace({
+    id: traceId,
+    sessionId: session?.id,
+    name: "Flight Search",
+  });
+
+
+  const spanId = generateUUID();
+
+  if (logger) {
+    logger.traceSpan(traceId, {
+      id: spanId,
+    });
+  }
+
   const userMessage = getMostRecentUserMessageCustom(messages);
 
   if (!userMessage) {
     return new Response("No user message found", { status: 400 });
   }
 
+  if (logger) {
+    logger.traceInput(traceId, userMessage.content)
+  }
+  
   let tokens: Tokens = {
     completion_tokens: 0,
     prompt_tokens: 0,
@@ -286,7 +327,19 @@ export async function POST(request: Request) {
       content: flightSearchPrompt,
     });
 
-    console.dir(finalMessages, { depth: null });
+    const generationId = generateUUID();
+
+    if (logger) {
+      logger.spanGeneration(spanId, {
+        id: generationId,
+        model: modelId,
+        provider: "openai",
+        messages: finalMessages as CompletionRequest[],
+        modelParameters: {
+          maxTokens: 5000
+        }
+      })
+    }
 
     let result = await azureOpenAI.chat.completions.create({
       messages: finalMessages as unknown as ChatCompletionMessageParam[],
@@ -294,6 +347,13 @@ export async function POST(request: Request) {
       model: modelId,
       tools: tools as any,
     });
+
+    if (logger) {
+      logger.generationResult(generationId, result as any);
+    }
+
+    if (result.choices[0].finish_reason === "tool_calls") {
+      await toolCallChain(result, finalMessages, modelId, logger, spanId);
 
     if (result.usage) {
       tokens.completion_tokens = result.usage.completion_tokens;
@@ -310,10 +370,16 @@ export async function POST(request: Request) {
       });
     }
 
+    if (logger) {
+      logger.traceOutput(traceId, result.choices[0].message.content as string)
+    }
+
     await redis.set(
       conversationId,
       JSON.stringify({ messages: finalMessages, tokens })
     );
+
+    await logger?.cleanup();
 
     return NextResponse.json({
       messages: [finalMessages[finalMessages.length - 1]],
@@ -328,6 +394,8 @@ export async function POST(request: Request) {
       },
       { status: 500 }
     );
+  } finally {
+    await maxim.cleanup();
   }
 }
 
@@ -387,6 +455,7 @@ async function executeTools(
       console.error(`Error executing tool ${tool.function.name}:`, error);
       // Return a structured error result instead of null
       return {
+        id: tool.id,
         name: tool.function.name as AllowedTools,
         result: {
           error:
@@ -411,17 +480,40 @@ async function toolCallChain(
   result: ChatCompletion,
   messages: CustomMessage[],
   modelId: string,
+  logger: MaximLogger | undefined,
+  spanId: string
   tokens: Tokens
 ) {
-  const toolsCalls = result.choices[0].message["tool_calls"];
+  const toolCalls = result.choices[0].message["tool_calls"];
 
-  const toolCallResults = await executeTools(toolsCalls);
+  if (logger) {
+    toolCalls?.map(toolCall => {
+      logger.spanToolCall(spanId, {
+        id: toolCall.id,
+        name: toolCall.function.name,
+        description: toolCall.function.name,
+        args: toolCall.function.arguments
+      })
+    })
+  }
+
+  const toolCallResults = await executeTools(toolCalls);
+
+  toolCallResults.map(toolCallResult => {
+    if (!logger) return;
+
+    if (toolCallResult.result.error) {
+      logger.toolCallError(toolCallResult.id, toolCallResult.result.error)
+    } else {
+      logger.toolCallResult(toolCallResult.id, JSON.stringify(toolCallResult.result))
+    }
+  });
 
   if (toolCallResults.length) {
     messages.push({
       role: "assistant",
       content: "",
-      tool_calls: toolsCalls,
+      tool_calls: toolCalls,
     });
   }
 
@@ -433,6 +525,25 @@ async function toolCallChain(
     });
   });
 
+  const nextSpanId = generateUUID();
+  const generationId = generateUUID();
+
+  if (logger) {
+    logger.spanSpan(spanId, {
+      id: nextSpanId,
+    });
+
+    logger.spanGeneration(nextSpanId, {
+      id: generationId,
+      model: modelId,
+      provider: "openai",
+      messages: messages as CompletionRequest[],
+      modelParameters: {
+        maxTokens: 5000
+      }
+    })
+  }
+
   const response = await azureOpenAI.chat.completions.create({
     messages: messages as unknown as ChatCompletionMessageParam[],
     max_tokens: 5000,
@@ -440,6 +551,12 @@ async function toolCallChain(
     tools: tools as any,
   });
 
+
+  if (logger) {
+    logger.generationResult(generationId, response as any);
+  }
+
+ 
   tokens.completion_tokens += response.usage?.completion_tokens ?? 0;
   tokens.prompt_tokens += response.usage?.prompt_tokens ?? 0;
   tokens.total_tokens += response.usage?.total_tokens ?? 0;
