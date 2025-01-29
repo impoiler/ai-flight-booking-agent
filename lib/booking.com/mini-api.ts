@@ -60,23 +60,24 @@ class BookingAPIClient {
   ): Promise<BookingComFlightsList> {
     const queryParams = new URLSearchParams({
       type: params.type,
-      adults: params.adults.toString(),
+      adults: params.adults?.toString() ?? '',
       cabinClass: params.cabinClass,
-      children: params.children.toString(),
+      children: params.children?.toString() ?? '',
       from: params.from,
       to: params.to,
       fromCountry: params.fromCountry,
       toCountry: params.toCountry,
       depart: params.depart,
       sort: params.sort,
+      enableVI: params.enableVI?.toString() ?? '',
       limit: "3",
-      enableVI: params.enableVI.toString(),
       ...(params.return && { return: params.return }),
-      ...(params.stops !== undefined && { stops: params.stops.toString() }),
+      ...(params.stops !== undefined && { stops: params.stops?.toString() ?? '' }),
       ...(params.depTimeInt && { depTimeInt: params.depTimeInt }),
       ...(params.arrTimeInt && { arrTimeInt: params.arrTimeInt }),
-      ...(params.duration && { duration: params.duration.toString() }),
-      ...(params.page !== undefined && { page: params.page.toString() }),
+      ...(params.duration !== undefined && { duration: params.duration?.toString() ?? '' }),
+      ...(params.page !== undefined && { page: params.page?.toString() ?? '' }),
+      ...(params.limit !== undefined && { limit: params.limit?.toString() ?? '' }),
     });
 
     const response = await fetch(
