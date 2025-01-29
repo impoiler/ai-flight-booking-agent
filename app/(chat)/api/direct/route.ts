@@ -260,21 +260,29 @@ export async function POST(request: Request) {
     apiKey: process.env.MAXIM_API_KEY!,
   });
 
+  console.log("[Debug] Initializing Maxim logger...");
   const logger = await maxim.logger({
     id: process.env.MAXIM_REPO_ID!,
   });
 
   if (!logger) {
-    console.log("Failed to init Maxim logger");
+    console.log("[Debug] Failed to init Maxim logger");
+  } else {
+    console.log("[Debug] Maxim logger initialized successfully");
   }
 
   // create session
+  console.log("[Debug] Creating logger session...");
   const session = logger?.session({
     id: conversationId,
+    name: conversationId,
   });
+  console.log("[Debug] Session created:", session?.id);
 
   const traceId = generateUUID();
+  console.log("[Debug] Generated trace ID:", traceId);
 
+  console.log("[Debug] Creating trace...");
   logger?.trace({
     id: traceId,
     sessionId: session?.id,
@@ -282,8 +290,10 @@ export async function POST(request: Request) {
   });
 
   const spanId = generateUUID();
+  console.log("[Debug] Generated span ID:", spanId);
 
   if (logger) {
+    console.log("[Debug] Creating trace span...");
     logger.traceSpan(traceId, {
       id: spanId,
     });
@@ -296,6 +306,7 @@ export async function POST(request: Request) {
   }
 
   if (logger) {
+    console.log("[Debug] Logging trace input...");
     logger.traceInput(traceId, userMessage.content);
   }
 
@@ -330,6 +341,7 @@ export async function POST(request: Request) {
     const generationId = generateUUID();
 
     if (logger) {
+      console.log("[Debug] Logging span generation...");
       logger.spanGeneration(spanId, {
         id: generationId,
         model: modelId,
@@ -349,6 +361,7 @@ export async function POST(request: Request) {
     });
 
     if (logger) {
+      console.log("[Debug] Logging generation result...");
       logger.generationResult(generationId, result as any);
     }
 
@@ -385,6 +398,7 @@ export async function POST(request: Request) {
       }
 
       if (logger) {
+        console.log("[Debug] Logging trace output...");
         logger.traceOutput(
           traceId,
           result.choices[0].message.content as string
@@ -396,6 +410,7 @@ export async function POST(request: Request) {
         JSON.stringify({ messages: finalMessages, tokens })
       );
 
+      console.log("[Debug] Cleaning up logger...");
       await logger?.cleanup();
 
       return NextResponse.json({
@@ -505,6 +520,7 @@ async function toolCallChain(
   const toolCalls = result.choices[0].message["tool_calls"];
 
   if (logger) {
+    console.log("[Debug] Logging tool calls...");
     toolCalls?.map((toolCall) => {
       logger.spanToolCall(spanId, {
         id: toolCall.id,
@@ -520,6 +536,7 @@ async function toolCallChain(
   toolCallResults.map((toolCallResult) => {
     if (!logger) return;
 
+    console.log("[Debug] Logging tool call result/error...");
     if (toolCallResult.result.error) {
       logger.toolCallError(toolCallResult.id, toolCallResult.result.error);
     } else {
@@ -550,10 +567,12 @@ async function toolCallChain(
   const generationId = generateUUID();
 
   if (logger) {
+    console.log("[Debug] Creating span span...");
     logger.spanSpan(spanId, {
       id: nextSpanId,
     });
 
+    console.log("[Debug] Logging span generation...");
     logger.spanGeneration(nextSpanId, {
       id: generationId,
       model: modelId,
@@ -573,6 +592,7 @@ async function toolCallChain(
   });
 
   if (logger) {
+    console.log("[Debug] Logging generation result...");
     logger.generationResult(generationId, response as any);
   }
 
