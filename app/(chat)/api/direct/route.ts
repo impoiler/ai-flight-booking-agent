@@ -374,51 +374,45 @@ export async function POST(request: Request) {
         spanId,
         tokens
       );
+    }
 
-      if (result.usage) {
-        tokens.completion_tokens = result.usage.completion_tokens;
-        tokens.prompt_tokens = result.usage.prompt_tokens;
-        tokens.total_tokens = result.usage.total_tokens;
-      }
+    if (result.usage) {
+      tokens.completion_tokens = result.usage.completion_tokens;
+      tokens.prompt_tokens = result.usage.prompt_tokens;
+      tokens.total_tokens = result.usage.total_tokens;
+    }
 
-      if (result.choices[0].finish_reason === "tool_calls") {
-        await toolCallChain(
-          result,
-          finalMessages,
-          modelId,
-          logger,
-          spanId,
-          tokens
-        );
-      } else {
-        finalMessages.push({
-          role: "assistant",
-          content: result.choices[0].message.content as string,
-        });
-      }
-
-      if (logger) {
-        console.log("[Debug] Logging trace output...");
-        logger.traceOutput(
-          traceId,
-          result.choices[0].message.content as string
-        );
-      }
-
-      await redis.set(
-        conversationId,
-        JSON.stringify({ messages: finalMessages, tokens })
+    if (result.choices[0].finish_reason === "tool_calls") {
+      await toolCallChain(
+        result,
+        finalMessages,
+        modelId,
+        logger,
+        spanId,
+        tokens
       );
-
-      console.log("[Debug] Cleaning up logger...");
-      await logger?.cleanup();
-
-      return NextResponse.json({
-        messages: [finalMessages[finalMessages.length - 1]],
-        conversationId: conversationId,
-        tokens,
+    } else {
+      finalMessages.push({
+        role: "assistant",
+        content: result.choices[0].message.content as string,
       });
     }
+
+    if (logger) {
+      console.log("[Debug] Logging trace output...");
+      logger.traceOutput(traceId, result.choices[0].message.content as string);
+    }
+
+    await redis.set(
+      conversationId,
+      JSON.stringify({ messages: finalMessages, tokens })
+    );
+
+    return NextResponse.json({
+      messages: [finalMessages[finalMessages.length - 1]],
+      conversationId: conversationId,
+      tokens,
+    });
   } catch (error: any) {
     console.error("Error in AI completion:", error);
     return NextResponse.json(
