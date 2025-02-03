@@ -1,5 +1,9 @@
 import { BookingComAirports } from "./interfaces/booking.com-airports-list";
-import { BookingComFlightDetails } from "./interfaces/booking.com-flight-details";
+import {
+  BookingComFlightDetails,
+  TravellerCabinLuggage,
+  TravellerCheckedLuggage,
+} from "./interfaces/booking.com-flight-details";
 import { BookingComFlightsList } from "./interfaces/booking.com-flights-list";
 
 // Types for API parameters
@@ -57,27 +61,33 @@ class BookingAPIClient {
 
   async searchFlights(
     params: FlightSearchParams
-  ): Promise<BookingComFlightsList> {
+  ): Promise<Partial<BookingComFlightsList>> {
     const queryParams = new URLSearchParams({
       type: params.type,
-      adults: params.adults?.toString() ?? '',
+      adults: params.adults?.toString() ?? "",
       cabinClass: params.cabinClass,
-      children: params.children?.toString() ?? '',
+      children: params.children?.toString() ?? "",
       from: params.from,
       to: params.to,
       fromCountry: params.fromCountry,
       toCountry: params.toCountry,
       depart: params.depart,
       sort: params.sort,
-      enableVI: params.enableVI?.toString() ?? '',
+      enableVI: params.enableVI?.toString() ?? "",
       limit: "3",
       ...(params.return && { return: params.return }),
-      ...(params.stops !== undefined && { stops: params.stops?.toString() ?? '' }),
+      ...(params.stops !== undefined && {
+        stops: params.stops?.toString() ?? "",
+      }),
       ...(params.depTimeInt && { depTimeInt: params.depTimeInt }),
       ...(params.arrTimeInt && { arrTimeInt: params.arrTimeInt }),
-      ...(params.duration !== undefined && { duration: params.duration?.toString() ?? '' }),
-      ...(params.page !== undefined && { page: params.page?.toString() ?? '' }),
-      ...(params.limit !== undefined && { limit: params.limit?.toString() ?? '' }),
+      ...(params.duration !== undefined && {
+        duration: params.duration?.toString() ?? "",
+      }),
+      ...(params.page !== undefined && { page: params.page?.toString() ?? "" }),
+      ...(params.limit !== undefined && {
+        limit: params.limit?.toString() ?? "",
+      }),
     });
 
     const response = await fetch(
@@ -94,16 +104,46 @@ class BookingAPIClient {
 
     const result = (await response.json()) as BookingComFlightsList;
 
-    return {
+    const data = {
       flightOffers: result.flightOffers.map((f) => ({
         token: f.token,
         tripType: f.tripType,
         brandedFareInfo: f.brandedFareInfo,
-        segments: f.segments,
+        segments: f.segments.map((s) => ({
+          departureAirport: {
+            city: s.departureAirport.cityName,
+            code: s.departureAirport.code,
+            name: s.departureAirport.name,
+          },
+          arrivalAirport: {
+            city: s.arrivalAirport.cityName,
+            code: s.arrivalAirport.code,
+            name: s.arrivalAirport.name,
+          },
+          arrivalTime: s.arrivalTime,
+          departureTime: s.departureTime,
+          totalTime: s.totalTime,
+          travellerCheckedLuggage: s.travellerCheckedLuggage.map((tb) => ({
+            luggageAllowance: {
+              luggageType: tb.luggageAllowance.luggageType,
+              maxTotalWeight: tb.luggageAllowance.maxTotalWeight,
+              massUnit: tb.luggageAllowance.massUnit,
+            },
+          })) as TravellerCheckedLuggage[],
+          travellerCabinLuggage: s.travellerCabinLuggage.map((tb) => ({
+            luggageAllowance: {
+              luggageType: tb.luggageAllowance.luggageType,
+              maxWeightPerPiece: tb.luggageAllowance.maxWeightPerPiece,
+              massUnit: tb.luggageAllowance.massUnit,
+            },
+          })) as TravellerCabinLuggage[],
+        })) as BookingComFlightsList["flightOffers"][number]["segments"],
         badges: f.badges,
-      })) as any,
+      })) as BookingComFlightsList["flightOffers"],
       searchCriteria: result.searchCriteria,
-    } as any;
+    };
+
+    return data;
   }
 
   async getFlightDetails(
@@ -142,7 +182,17 @@ class BookingAPIClient {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    return await response.json();
+    const result = await response.json();
+
+    const data = [
+      {
+        city: result.city,
+        code: result.code,
+        name: result.name,
+      },
+    ] as BookingComAirports;
+
+    return data;
   }
 }
 

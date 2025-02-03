@@ -197,3 +197,7 @@ export const flightSearchTools: ChatCompletionTool[] = [
     type: "function",
   },
 ];
+
+export const flightSearchMiniTools = flightSearchTools.filter(
+  (tool) => tool.function.name !== "flightSearchTools"
+);

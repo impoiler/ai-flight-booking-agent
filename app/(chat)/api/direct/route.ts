@@ -12,7 +12,10 @@ import {
   ChatCompletionMessageToolCall,
 } from "openai/resources/index.mjs";
 
-import { AllowedFlightSearchTools, flightSearchTools } from "@/constant/tools";
+import {
+  AllowedFlightSearchTools,
+  flightSearchMiniTools,
+} from "@/constant/tools";
 import { CompletionRequest, Maxim, MaximLogger } from "@maximai/maxim-js";
 
 export const maxDuration = 60;
@@ -155,12 +158,12 @@ export async function POST(request: Request) {
         },
       });
     }
-
+    const relevantMessages = await getRelevantMessages(finalMessages, tokens);
     let result = await azureOpenAI.chat.completions.create({
-      messages: finalMessages as unknown as ChatCompletionMessageParam[],
+      messages: relevantMessages as unknown as ChatCompletionMessageParam[],
       max_tokens: 5000,
       model: modelId,
-      tools: flightSearchTools,
+      tools: flightSearchMiniTools,
     });
 
     if (logger) {
@@ -370,11 +373,13 @@ async function toolCallChain(
     });
   }
 
+  const relevantMessages = await getRelevantMessages(messages, tokens);
+
   const response = await azureOpenAI.chat.completions.create({
-    messages: messages as unknown as ChatCompletionMessageParam[],
+    messages: relevantMessages as unknown as ChatCompletionMessageParam[],
     max_tokens: 5000,
     model: modelId,
-    tools: flightSearchTools,
+    tools: flightSearchMiniTools,
   });
 
   if (logger) {
@@ -394,4 +399,73 @@ async function toolCallChain(
       content: response.choices[0].message.content as string,
     });
   }
+}
+
+async function shouldIncludeToolCallResult(
+  query: string,
+  tokens: Tokens
+): Promise<boolean> {
+  const result = await azureOpenAI.chat.completions.create({
+    messages: [
+      {
+        role: "system",
+        content: `You are a flight booking assistant with access to the following tools: ${flightSearchMiniTools
+          .map((tool) => tool.function.name)
+          .join(", ")}.
+        Analyze the user's message and determine if you need the results from previous tool calls to answer the next question.
+        Respond with "YES" if you need the tool call results, or "NO" if you can answer without them.
+        Consider the context and specificity of the user's query when making your decision.`,
+      },
+      {
+        role: "user",
+        content: query,
+      },
+    ],
+    model: "gpt-4o",
+  });
+
+  tokens.completion_tokens += result.usage?.completion_tokens ?? 0;
+  tokens.prompt_tokens += result.usage?.prompt_tokens ?? 0;
+  tokens.total_tokens += result.usage?.total_tokens ?? 0;
+
+  let shouldInclude = false;
+
+  if (result.choices[0].message.content?.includes("YES")) {
+    shouldInclude = true;
+  }
+
+  return shouldInclude;
+}
+
+async function getRelevantMessages(messages: CustomMessage[], tokens: Tokens) {
+  const messagesCopy = [...messages];
+  const shouldIncludeToolCall = await shouldIncludeToolCallResult(
+    messagesCopy[messagesCopy.length - 1].content,
+    tokens
+  );
+  // const shouldIncludeToolCall = true;
+
+  if (shouldIncludeToolCall) {
+    return messagesCopy;
+  }
+
+  return messagesCopy.map((message) => {
+    if (message.role === "tool") {
+      return { ...message, content: "" };
+    }
+    return message;
+  });
+}
+
+function getMessages(messages: CustomMessage[], keep: number = 3) {
+  if (messages.length < keep) return messages;
+
+  const messagesCopy = [...messages.slice(-keep)];
+
+  messagesCopy.unshift({
+    role: "system",
+    content: flightSearchPrompt,
+  });
+
+  return messagesCopy;
 }
