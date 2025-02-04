@@ -82,6 +82,10 @@ export async function POST(request: Request) {
   const session = logger?.session({
     id: conversationId,
     name: conversationId,
+    tags: {
+      env: process.env.NODE_ENV,
+      conversationId,
+    },
   });
   console.log("[Debug] Session created:", session?.id);
 
@@ -93,6 +97,10 @@ export async function POST(request: Request) {
     id: traceId,
     sessionId: session?.id,
     name: "Flight Search",
+    tags: {
+      env: process.env.NODE_ENV,
+      conversationId,
+    },
   });
 
   const spanId = generateUUID();
@@ -102,6 +110,10 @@ export async function POST(request: Request) {
     console.log("[Debug] Creating trace span...");
     logger.traceSpan(traceId, {
       id: spanId,
+      tags: {
+        env: process.env.NODE_ENV,
+        conversationId,
+      },
     });
   }
 
@@ -155,6 +167,10 @@ export async function POST(request: Request) {
         messages: finalMessages as CompletionRequest[],
         modelParameters: {
           maxTokens: 5000,
+        },
+        tags: {
+          env: process.env.NODE_ENV,
+          conversationId,
         },
       });
     }
