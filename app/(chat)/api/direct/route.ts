@@ -160,19 +160,26 @@ export async function POST(request: Request) {
 
     if (logger) {
       console.log("[Debug] Logging span generation...");
-      logger.spanGeneration(spanId, {
-        id: generationId,
-        model: modelId,
-        provider: "openai",
-        messages: finalMessages as CompletionRequest[],
-        modelParameters: {
-          maxTokens: 5000,
-        },
-        tags: {
-          env: process.env.NODE_ENV,
-          conversationId,
-        },
-      });
+      logger
+        .spanGeneration(spanId, {
+          id: generationId,
+          model: modelId,
+          provider: "openai",
+          messages: finalMessages as CompletionRequest[],
+          modelParameters: {
+            maxTokens: 5000,
+          },
+          tags: {
+            env: process.env.NODE_ENV,
+            conversationId,
+          },
+        })
+        .evaluate.withEvaluators(
+          "Clarity",
+          "Bias",
+          "PII Detection",
+          "Toxicity"
+        );
     }
     const relevantMessages = await getRelevantMessages(finalMessages, tokens);
     let result = await azureOpenAI.chat.completions.create({
@@ -185,6 +192,12 @@ export async function POST(request: Request) {
     if (logger) {
       console.log("[Debug] Logging generation result...");
       logger.generationResult(generationId, result as any);
+      logger.generationEvaluate(generationId).withVariables(
+        {
+          output: result.choices[0].message.content as string,
+        },
+        ["*"] //Attach all evaluators
+      );
     }
 
     if (result.usage) {
@@ -378,15 +391,17 @@ async function toolCallChain(
     });
 
     console.log("[Debug] Logging span generation...");
-    logger.spanGeneration(nextSpanId, {
-      id: generationId,
-      model: modelId,
-      provider: "openai",
-      messages: messages as CompletionRequest[],
-      modelParameters: {
-        maxTokens: 5000,
-      },
-    });
+    logger
+      .spanGeneration(nextSpanId, {
+        id: generationId,
+        model: modelId,
+        provider: "openai",
+        messages: messages as CompletionRequest[],
+        modelParameters: {
+          maxTokens: 5000,
+        },
+      })
+      .evaluate.withEvaluators("Clarity", "Bias", "PII Detection", "Toxicity");
   }
 
   const relevantMessages = await getRelevantMessages(messages, tokens);
@@ -401,6 +416,12 @@ async function toolCallChain(
   if (logger) {
     console.log("[Debug] Logging generation result...");
     logger.generationResult(generationId, response as any);
+    logger.generationEvaluate(generationId).withVariables(
+      {
+        output: response.choices[0].message.content as string,
+      },
+      ["*"] // Attach all evaluators
+    );
   }
 
   tokens.completion_tokens += response.usage?.completion_tokens ?? 0;
