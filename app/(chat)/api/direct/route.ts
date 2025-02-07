@@ -196,7 +196,7 @@ export async function POST(request: Request) {
         {
           output: result.choices[0].message.content as string,
         },
-        ["*"] //Attach all evaluators
+        ["Clarity", "Bias", "PII Detection", "Toxicity"] //Attach all evaluators
       );
     }
 
@@ -420,7 +420,7 @@ async function toolCallChain(
       {
         output: response.choices[0].message.content as string,
       },
-      ["*"] // Attach all evaluators
+      ["Clarity", "Bias", "PII Detection", "Toxicity"] // Attach all evaluators
     );
   }
 
