@@ -1,11 +1,3 @@
-import {
-  type Message,
-  convertToCoreMessages,
-  createDataStreamResponse,
-  streamText,
-} from "ai";
-import { z } from "zod";
-
 import { auth } from "@/app/(auth)/auth";
 import { customModel } from "@/lib/ai";
 import { models } from "@/lib/ai/models";
@@ -21,73 +13,45 @@ import {
   getMostRecentUserMessage,
   sanitizeResponseMessages,
 } from "@/lib/utils";
-
 import {
-  FlightsOptions,
-  minimalFlightsOptions,
-} from "@/components/flight-options-list";
+  type Message,
+  convertToCoreMessages,
+  createDataStreamResponse,
+  streamText,
+} from "ai";
+import { z } from "zod";
+
+import { bookingClient } from "@/lib/booking.com/api";
+import { mail } from "@/lib/resend/mail";
 import { generateTitleFromUserMessage } from "../../actions";
 
 export const maxDuration = 60;
 
 type AllowedTools =
-  | "getWeather"
-  | "getAirportSuggestions"
-  | "searchOneWayFlights"
-  | "searchRoundTripFlights"
+  | "searchAirports"
+  | "searchFlights"
   | "getFlightDetails"
-  | "getFlightUpsells";
+  | "confirmBooking";
 
 const flightTools: AllowedTools[] = [
-  "getAirportSuggestions",
-  "searchOneWayFlights",
-  "searchRoundTripFlights",
+  "searchAirports",
+  "searchFlights",
   "getFlightDetails",
-  "getFlightUpsells",
+  "confirmBooking",
 ];
 
-const weatherTools: AllowedTools[] = ["getWeather"];
-
-const allTools: AllowedTools[] = [...flightTools, ...weatherTools];
-
-const rapidApiHeaders = {
-  "X-RapidAPI-Key": process.env.RAPIDAPI_KEY as string,
-  "X-RapidAPI-Host": process.env.RAPIDAPI_HOST as string,
-};
-
-const rapidApiOptions = {
-  headers: {
-    ...rapidApiHeaders,
-  },
-};
-
-const rapidApiBaseUrl = process.env.RAPIDAPI_BASE_URL as string;
-
-function truncateFlightDetails(data: FlightsOptions): minimalFlightsOptions[] {
-  return data.data.listings.map((listing) => ({
-    id: listing.id,
-    airline: {
-      name: listing.airlines[0].name,
-      logo: listing.airlines[0].image,
-    },
-    price: listing.totalPriceWithDecimal.price,
-    arrivalInfo: listing.slices[0].segments[0].arrivalInfo,
-    departInfo: listing.slices[0].segments[0].departInfo,
-    duration: listing.slices[0].segments[0].duration,
-    flightNumber: listing.slices[0].segments[0].flightNumber,
-    itemKey: listing.itemKey,
-    priceKey: listing.priceKey,
-    stopQuantity: listing.slices[0].segments[0].stopQuantity,
-  }));
-}
+const allTools: AllowedTools[] = [...flightTools];
 
 export async function POST(request: Request) {
   const {
     id,
     messages,
     modelId,
-  }: { id: string; messages: Array<Message>; modelId: string } =
-    await request.json();
+  }: {
+    id: string;
+    messages: Array<Message>;
+    modelId: string;
+  } = await request.json();
 
   const session = await auth();
 
@@ -96,6 +60,15 @@ export async function POST(request: Request) {
   }
 
   const model = models.find((model) => model.id === modelId);
+  let provider: "openai" | "anthropic" | "x" = "openai";
+
+  if (model?.id.startsWith("gpt")) {
+    provider = "openai";
+  } else if (model?.id.startsWith("claude")) {
+    provider = "anthropic";
+  } else if (model?.id.startsWith("grok")) {
+    provider = "x";
+  }
 
   if (!model) {
     return new Response("Model not found", { status: 404 });
@@ -131,117 +104,101 @@ export async function POST(request: Request) {
       });
 
       const result = streamText({
-        model: customModel(model.apiIdentifier),
+        model: customModel(model.apiIdentifier, provider),
+        maxTokens: 2000,
         system: systemPrompt,
         messages: coreMessages,
         maxSteps: 10,
         experimental_activeTools: allTools,
         tools: {
-          getWeather: {
-            description: "Get the current weather at a location",
-            parameters: z.object({
-              latitude: z.number(),
-              longitude: z.number(),
-            }),
-            execute: async ({ latitude, longitude }) => {
-              const response = await fetch(
-                `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m&hourly=temperature_2m&daily=sunrise,sunset&timezone=auto`
-              );
-
-              const weatherData = await response.json();
-              return weatherData;
-            },
-          },
-          getAirportSuggestions: {
+          searchAirports: {
             description: "Get airport suggestions based on a search query",
             parameters: z.object({
               query: z.string(),
             }),
             execute: async ({ query }) => {
-              console.log("🛠️ EXECUTING getAirportSuggestions");
-              const response = await fetch(
-                `${rapidApiBaseUrl}/flights/auto-complete?query=${encodeURIComponent(
-                  query
-                )}`,
-                rapidApiOptions
-              );
-
-              return await response.json();
+              const suggestions = await bookingClient.searchAirports(query);
+              return suggestions;
             },
           },
-          searchOneWayFlights: {
-            description: "Search for one-way flights between airports",
+          searchFlights: {
+            description: "Search for flights between airports",
             parameters: z.object({
-              originAirportCode: z.string(),
-              destinationAirportCode: z.string(),
-              departureDate: z.string(), // Format: YYYY-MM-DD
+              type: z.enum(["ONEWAY", "ROUNDTRIP", "MULTISTOP"]),
+              adults: z.number(),
+              cabinClass: z.enum([
+                "ECONOMY",
+                "BUSINESS",
+                "FIRST",
+                "PREMIUM_ECONOMY",
+              ]),
+              children: z.number(),
+              from: z.string(),
+              to: z.string(),
+              fromCountry: z.string(),
+              toCountry: z.string(),
+              depart: z.string(),
+              return: z.string().optional(),
+              sort: z.enum(["CHEAPEST", "FASTEST", "BEST"]),
+              enableVI: z.number(),
+              stops: z.number().optional(),
+              depTimeInt: z.string().optional(),
+              arrTimeInt: z.string().optional(),
+              duration: z.number().optional(),
+              page: z.number().optional(),
+              limit: z.number().optional().default(10),
             }),
-            execute: async ({
-              originAirportCode,
-              destinationAirportCode,
-              departureDate,
-            }) => {
-              console.log("🛠️ EXECUTING searchOneWayFlights");
+            execute: async (params) => {
+              console.log("🛠️ Executing searchFlights tool", params);
 
-              const response = await fetch(
-                `${rapidApiBaseUrl}/flights/search-one-way?originAirportCode=${originAirportCode}&destinationAirportCode=${destinationAirportCode}&departureDate=${departureDate}`,
-                rapidApiOptions
-              );
-              const result = await response.json();
-              return truncateFlightDetails(result).splice(0, 15);
-            },
-          },
-          searchRoundTripFlights: {
-            description: "Search for round-trip flights between airports",
-            parameters: z.object({
-              originAirportCode: z.string(),
-              destinationAirportCode: z.string(),
-              departureDate: z.string(), // Format: YYYY-MM-DD
-              returnDate: z.string(), // Format: YYYY-MM-DD
-            }),
-            execute: async ({
-              originAirportCode,
-              destinationAirportCode,
-              departureDate,
-              returnDate,
-            }) => {
-              console.log("🛠️ EXECUTING searchRoundTripFlights");
-
-              const response = await fetch(
-                `${rapidApiBaseUrl}/flights/search-roundtrip?originAirportCode=${originAirportCode}&destinationAirportCode=${destinationAirportCode}&departureDate=${departureDate}&returnDate=${returnDate}`,
-                rapidApiOptions
-              );
-              return await response.json();
+              const flights = await bookingClient.searchFlights(params);
+              return flights;
             },
           },
           getFlightDetails: {
             description: "Get detailed information about a specific flight",
             parameters: z.object({
-              itemKey: z.string(),
-              priceKey: z.string(),
+              flightId: z.string(),
+              excludedAncillaries: z.string(),
+              priceInSearch: z.string(),
             }),
-            execute: async ({ itemKey, priceKey }) => {
-              console.log("🛠️ EXECUTING getFlightDetails");
-              const response = await fetch(
-                `${rapidApiBaseUrl}/flights/details?itemKey=${itemKey}&priceKey=${priceKey}`,
-                rapidApiOptions
-              );
-              return await response.json();
+            execute: async (params) => {
+              console.log("🛠️ Executing getFlightDetails tool", params);
+              const details = await bookingClient.getFlightDetails(params);
+              return details;
             },
           },
-          getFlightUpsells: {
-            description: "Get upsell options for a specific flight",
+          confirmBooking: {
+            description: "Confirm a flight booking with passenger details",
             parameters: z.object({
-              itemKey: z.string(),
-              priceKey: z.string(),
+              flightNumber: z.string(),
+              flightId: z.string().default(generateUUID()),
+              passengerName: z.string(),
+              passengerEmail: z.string().email(),
+              passengerPhone: z.string(),
             }),
-            execute: async ({ itemKey, priceKey }) => {
-              console.log("🛠️ EXECUTING getFlightUpsells");
-              const response = await fetch(
-                `${rapidApiBaseUrl}/flights/upsells?itemKey=${itemKey}&priceKey=${priceKey}`,
-                rapidApiOptions
-              );
-              return await response.json();
+            execute: async ({
+              flightNumber,
+              flightId,
+              passengerName,
+              passengerEmail,
+              passengerPhone,
+            }) => {
+              console.log("🛠️ EXECUTING confirmBooking");
+              await mail.sendFlightConfirmation(passengerEmail, {
+                flightNumber,
+                flightId,
+                passengerName,
+                passengerEmail,
+                passengerPhone,
+              });
+              return {
+                flightNumber,
+                flightId,
+                passengerName,
+                passengerEmail,
+                passengerPhone,
+              };
             },
           },
         },
@@ -253,17 +210,16 @@ export async function POST(request: Request) {
               if (responseMessagesWithoutIncompleteToolCalls.length === 0) {
                 return;
               }
+              const messageId = generateUUID();
+
               await saveMessages({
                 messages: responseMessagesWithoutIncompleteToolCalls.map(
                   (message) => {
-                    const messageId = generateUUID();
-
                     if (message.role === "assistant") {
                       dataStream.writeMessageAnnotation({
                         messageIdFromServer: messageId,
                       });
                     }
-
                     return {
                       id: messageId,
                       chatId: id,

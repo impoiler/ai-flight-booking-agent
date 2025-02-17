@@ -7,17 +7,19 @@ import { memo, useState } from "react";
 
 import type { Vote } from "@/lib/db/schema";
 
-import { cn } from "@/lib/utils";
+import { cn, generateUUID } from "@/lib/utils";
 import equal from "fast-deep-equal";
-import { AirportSuggestions } from "./flight-airport-suggestions";
-import { FlightsOptionsList } from "./flight-options-list";
+import { BookingDotComAirportList } from "./booking-cards/airport-suggestions";
+import FlightBookingConfirmation from "./booking-cards/booking-confirmation";
+import { BookingDotComFlightDetails } from "./booking-cards/flight-details";
+import { BookingDotComFlightsList } from "./booking-cards/flights-list";
 import { PencilEditIcon, SparklesIcon } from "./icons";
 import { Markdown } from "./markdown";
 import { MessageActions } from "./message-actions";
 import { MessageEditor } from "./message-editor";
 import { PreviewAttachment } from "./preview-attachment";
+import ToolCallLoading from "./tool-call-loading";
 import { Button } from "./ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Weather } from "./weather";
 
 const PurePreviewMessage = ({
@@ -83,20 +85,15 @@ const PurePreviewMessage = ({
             {message.content && mode === "view" && (
               <div className="flex flex-row gap-2 items-start">
                 {message.role === "user" && !isReadonly && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        className="px-2 h-fit rounded-full text-muted-foreground opacity-0 group-hover/message:opacity-100"
-                        onClick={() => {
-                          setMode("edit");
-                        }}
-                      >
-                        <PencilEditIcon />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Edit message</TooltipContent>
-                  </Tooltip>
+                  <Button
+                    variant="ghost"
+                    className="px-2 h-fit rounded-full text-muted-foreground opacity-0 group-hover/message:opacity-100"
+                    onClick={() => {
+                      setMode("edit");
+                    }}
+                  >
+                    <PencilEditIcon />
+                  </Button>
                 )}
 
                 <div
@@ -128,55 +125,83 @@ const PurePreviewMessage = ({
               <div className="flex flex-col gap-4">
                 {message.toolInvocations.map((toolInvocation) => {
                   const { toolName, toolCallId, state, args } = toolInvocation;
-                  console.log(toolName, toolCallId, state, args);
 
-                  if (state === "result") {
-                    const { result } = toolInvocation;
-                    console.log(result);
-
-                    return (
-                      <div key={toolCallId}>
-                        {toolName === "getWeather" ? (
-                          <Weather weatherAtLocation={result} />
-                        ) : toolName === "getAirportSuggestions" ? (
-                          <AirportSuggestions
-                            result={result}
-                            onChange={(airportId) => {
-                              console.log(airportId);
-                            }}
-                          />
-                        ) : toolName === "searchOneWayFlights" ? (
-                          <FlightsOptionsList
-                            result={result}
-                            onChange={(flightId) => {
-                              console.log(flightId);
-                            }}
-                          />
-                        ) : (
-                          <pre>{JSON.stringify(result, null, 2)}</pre>
-                        )}
-                      </div>
-                    );
+                  switch (state) {
+                    case "result":
+                      const { result } = toolInvocation;
+                      return (
+                        <div key={toolCallId}>
+                          {(() => {
+                            switch (toolName) {
+                              case "getWeather":
+                                return <Weather weatherAtLocation={result} />;
+                              case "searchAirports":
+                                return (
+                                  <BookingDotComAirportList
+                                    airports={result}
+                                    onChange={(airportId) => {
+                                      setMessages((prevMessages) => {
+                                        const newMessages = [...prevMessages];
+                                        newMessages.push({
+                                          content: `I will select ${airportId} airport.`,
+                                          id: generateUUID(),
+                                          role: "user",
+                                        });
+                                        return newMessages;
+                                      });
+                                      reload();
+                                    }}
+                                  />
+                                );
+                              case "searchFlights":
+                                return (
+                                  <BookingDotComFlightsList
+                                    result={result}
+                                    onChange={(flight) => {
+                                      setMessages((prevMessages) => {
+                                        const newMessages = [...prevMessages];
+                                        newMessages.push({
+                                          content: `I think I will select ${flight}. show me the details.`,
+                                          id: generateUUID(),
+                                          role: "user",
+                                        });
+                                        return newMessages;
+                                      });
+                                      reload();
+                                    }}
+                                  />
+                                );
+                              case "getFlightDetails":
+                                return (
+                                  <BookingDotComFlightDetails result={result} />
+                                );
+                              case "confirmBooking":
+                                return (
+                                  <FlightBookingConfirmation result={result} />
+                                );
+                              default:
+                                return (
+                                  <pre>{JSON.stringify(result, null, 2)}</pre>
+                                );
+                            }
+                          })()}
+                        </div>
+                      );
+                    default:
+                      return (
+                        <div key={toolCallId}>
+                          {toolName === "searchAirports" ? (
+                            <ToolCallLoading message="✈️  Getting airport suggestions" />
+                          ) : toolName === "searchFlights" ? (
+                            <ToolCallLoading message="🔎 Searching flights" />
+                          ) : toolName === "getFlightDetails" ? (
+                            <ToolCallLoading message="📋 Getting flight details" />
+                          ) : toolName === "confirmBooking" ? (
+                            <ToolCallLoading message="✅ Confirming booking" />
+                          ) : null}
+                        </div>
+                      );
                   }
-                  return (
-                    <div
-                      key={toolCallId}
-                      className={cx({
-                        skeleton: [
-                          "getWeather",
-                          // "getAirportSuggestions",
-                        ].includes(toolName),
-                      })}
-                    >
-                      {toolName === "getWeather" ? (
-                        <Weather />
-                      ) : toolName === "getAirportSuggestions" ? (
-                        <AirportSuggestions />
-                      ) : toolName === "searchOneWayFlights" ? (
-                        <FlightsOptionsList />
-                      ) : null}
-                    </div>
-                  );
                 })}
               </div>
             )}

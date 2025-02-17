@@ -9,11 +9,11 @@ import { ChatHeader } from '@/components/chat-header';
 import type { Vote } from '@/lib/db/schema';
 import { fetcher } from '@/lib/utils';
 
-import { Block } from './block';
-import { MultimodalInput } from './multimodal-input';
-import { Messages } from './messages';
-import { VisibilityType } from './visibility-selector';
 import { useBlockSelector } from '@/hooks/use-block';
+import { Block } from './block';
+import { Messages } from './messages';
+import { MultimodalInput } from './multimodal-input';
+import { VisibilityType } from './visibility-selector';
 
 export function Chat({
   id,
